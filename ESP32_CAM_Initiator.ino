@@ -9,6 +9,10 @@
 #include <EEPROM.h>
 #include <soc/rtc_cntl_reg.h>
 
+// These are for the object detection model
+#include <FOMO_Model_ESP32_CAM_V2_inferencing.h>
+#include <edge-impulse-sdk/dsp/image/image.hpp>
+
 
 // GPIO for the push button
 #define BUTTON_PIN 13
@@ -32,6 +36,24 @@
 #define VSYNC_GPIO_NUM   25
 #define HREF_GPIO_NUM    23
 #define PCLK_GPIO_NUM    22
+// ---------------------------------------------------- Object Detection Code -----------------------------------------------
+#define EI_CAMERA_RAW_FRAME_BUFFER_COLS 320
+#define EI_CAMERA_RAW_FRAME_BUFFER_ROWS 240
+#define EI_CAMERA_FRAME_BYTE_SIZE       3
+
+// Set this to true to see e.g. features generated from the raw signal
+static bool debug_nn = false;
+
+// This is used to check if the camera driver has been initialized
+static bool is_initialised = false;
+
+// Points to the output of the capture
+static uint8_t *snapshot_buf = nullptr;
+
+// Forward declare these functions
+void ei_camera_deinit(void);
+bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t* out_buf);
+// ---------------------------------------------------- End of Object Detection Code ----------------------------------------
 
 // ---------------------------------------------------- Camera Code ---------------------------------------------------------
 // Camera initialization function
@@ -61,15 +83,23 @@ bool initCamera()
 
     if (psramFound()) 
     {
-        config.frame_size = FRAMESIZE_UXGA;
-        config.jpeg_quality = 10;
-        config.fb_count = 2;
+        config.frame_size = FRAMESIZE_QVGA;
+        config.jpeg_quality = 12;
+        config.fb_count = 1;
     } else 
     {
         config.frame_size = FRAMESIZE_SVGA;
         config.jpeg_quality = 12;
         config.fb_count = 1;
     }
+
+    // These paramters are for the object deteection model
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+    // sensor_t* s = esp_camera_sensor_get();
+
+    is_initialised = true;
 
     return esp_camera_init(&config) == ESP_OK;
 }
@@ -102,8 +132,10 @@ bool takePhoto()
     return true;
 }
 
+// Initialize the microSD card
 void initMicroSDCard()
 {
+  // 
   if(!SD_MMC.begin("/sdcard", true))
   {
     Serial.println("Failed to found microSD card.");
@@ -183,6 +215,15 @@ void IRAM_ATTR buttonPressedISR()
 void setup() {
   // put your setup code here, to run once:
 
+  /* TEST CODE */
+  if (psramFound()) {
+        snapshot_buf = (uint8_t *)ps_malloc(EI_CAMERA_RAW_FRAME_BUFFER_COLS * EI_CAMERA_RAW_FRAME_BUFFER_ROWS * EI_CAMERA_FRAME_BYTE_SIZE);
+    } else {
+        Serial.println("Error: PSRAM not found! FOMO requires PSRAM.");
+        while(1);
+    }
+  /* END OF TEST CODE */
+
   // Set up the Serial Monitor
   Serial.begin(115200);
 
@@ -205,15 +246,6 @@ void setup() {
   // Initialize SD card
   initMicroSDCard();
   EEPROM.begin(EEPROM_SIZE);
-
-  /*
-  if (!SD_MMC.begin()) 
-  {
-    Serial.println("SD Card init failed!");
-    while (1);
-  }
-  Serial.println("SD Card initialized successfully.");
-  */
 
   // Set the ESP32-CAM as a Wi-Fi station
   WiFi.mode(WIFI_STA);
@@ -277,4 +309,157 @@ void loop() {
     Serial.println("Sending Error");
   }
   delay(2000);
+
+// ---------------------------------------------------- Object Detection Code -----------------------------------------------
+  if(ei_sleep(5) != EI_IMPULSE_OK)
+  {
+    return;
+  }
+
+  //snapshot_buf = (uint8_t*)malloc(EI_CAMERA_RAW_FRAME_BUFFER_COLS * EI_CAMERA_RAW_FRAME_BUFFER_ROWS * EI_CAMERA_FRAME_BYTE_SIZE);
+
+  // Check if allocation was successful
+  if(snapshot_buf == nullptr)
+  {
+    ei_printf("ERR: Failed to allocate snapshot buffer!\n");
+    return;
+  }
+
+  ei::signal_t signal;
+  signal.total_length = EI_CLASSIFIER_INPUT_WIDTH * EI_CLASSIFIER_INPUT_HEIGHT;
+  signal.get_data = &ei_camera_get_data;
+
+  if(ei_camera_capture((size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT, snapshot_buf) == false)
+  {
+    ei_printf("Failed to capture image\r\n");
+    return;
+  }
+
+  // Run the classifier
+  ei_impulse_result_t result_2 = { 0 };
+
+  EI_IMPULSE_ERROR err = run_classifier(&signal, &result_2, debug_nn);
+  if(err != EI_IMPULSE_OK)
+  {
+    ei_printf("ERR: Failed to run classifier (%d)\n", err);
+    return;
+  }
+
+  // Print the predictions
+  ei_printf("Predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
+              result_2.timing.dsp, result_2.timing.classification, result_2.timing.anomaly);
+
+  #if EI_CLASSIFIER_OBJECT_DETECTION == 1
+    ei_printf("Object detection bounding boxes:\r\n");
+    for(uint32_t i = 0; i < result_2.bounding_boxes_count; i++)
+    {
+      ei_impulse_result_bounding_box_t bb = result_2.bounding_boxes[i];
+      if(bb.value == 0)
+      {
+        continue;
+      }
+
+      ei_printf("  %s (%f) [ x: %u, y: %u, width: %u, height: %u ]\r\n",
+                bb.label,
+                bb.value,
+                bb.x,
+                bb.y,
+                bb.width,
+                bb.height);
+    }
+  #endif
+
+    //free(snapshot_buf);
+// ---------------------------------------------------- End of Object Detection Code ----------------------------------------
 }
+// ---------------------------------------------------- Object Detection Code -----------------------------------------------
+// Stop streaming of sensor data by de-initializing the camera
+void ei_camera_deinit(void)
+{
+  esp_err_t err = esp_camera_deinit();
+
+  if(err != ESP_OK)
+  {
+    ei_printf("Camera de-initialization failed.\n");
+    return;
+
+    is_initialised = false;
+    return;
+  }
+}
+
+// Capture, rescale, and crop image
+bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t* out_buf)
+{
+
+  bool do_resize = false;
+
+  if(!is_initialised || out_buf == nullptr)
+  {
+    ei_printf("ERR: Camera is not initialized\r\n");
+    return false;
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) 
+  {
+    Serial.println("Camera capture failed!");
+    return false;
+  }
+
+  bool converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, snapshot_buf);
+
+  esp_camera_fb_return(fb);
+
+  if(!converted)
+  {
+    ei_printf("Conversion failed\n");
+    return false;
+  }
+
+  if((img_width != EI_CAMERA_RAW_FRAME_BUFFER_COLS) || (img_height != EI_CAMERA_RAW_FRAME_BUFFER_ROWS))
+  {
+    do_resize = true;
+  }
+
+  if(do_resize)
+  {
+    ei::image::processing::crop_and_interpolate_rgb888(
+      out_buf,
+      EI_CAMERA_RAW_FRAME_BUFFER_COLS,
+      EI_CAMERA_RAW_FRAME_BUFFER_ROWS,
+      out_buf,
+      img_width,
+      img_height
+    );
+  }
+
+  return true;
+}
+
+static int ei_camera_get_data(size_t offset, size_t length, float* out_ptr)
+{
+  // We already have a RGB888 buffer, so recalculate offset into pixel index
+  size_t pixel_ix = offset * 3;
+  size_t pixels_left = length;
+  size_t out_ptr_ix = 0;
+
+  while(pixels_left != 0)
+  {
+    // Swap BGR to RGB here
+    // due to https://github.com/espressif/esp32-camera/issues/379
+    out_ptr[out_ptr_ix] = (snapshot_buf[pixel_ix+ 2] << 16) + (snapshot_buf[pixel_ix + 1] << 8) + snapshot_buf[pixel_ix];
+
+    //go to the next pixel
+    out_ptr_ix++;
+    pixel_ix += 3;
+    pixels_left--;
+  
+  }
+  // and done!
+  return 0;
+}
+#if !defined(EI_CLASSIFIER_SENSOR) || EI_CLASSIFIER_SENSOR != EI_CLASSIFIER_SENSOR_CAMERA
+#error "Invalid model for current sensor"
+#endif
+// ---------------------------------------------------- End of Object Detection Code ----------------------------------------
