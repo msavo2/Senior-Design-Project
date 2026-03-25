@@ -288,6 +288,7 @@ void loop() {
   // Did an interrupt occur?
   if(takePhotoFlag)
   {
+    Serial.println("Taking a photo...");
     takePhoto();
     takePhotoFlag = false;
   }
@@ -326,8 +327,8 @@ void loop() {
   }
 
   // Print the predictions
-  ei_printf("Predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
-              result_2.timing.dsp, result_2.timing.classification, result_2.timing.anomaly);
+  // ei_printf("Predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
+              // result_2.timing.dsp, result_2.timing.classification, result_2.timing.anomaly);
 
   #if EI_CLASSIFIER_OBJECT_DETECTION == 1
     ei_printf("Object detection bounding boxes:\r\n");
