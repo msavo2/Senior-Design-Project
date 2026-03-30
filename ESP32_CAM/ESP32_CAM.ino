@@ -29,6 +29,10 @@
 #define NETWORKNAME "ESP32_CAM_NETWORK"
 // Server name that we'll enter into a web browser (e.g., 'ESP32_CAM_SERVER.local') after we connect to the network
 #define SERVERNAME "ESP32_CAM_SERVER"
+// The size of our rolling buffer
+#define BUFFERCOUNT 50
+// The index of the buffer
+short bufferIndex = 0;
 
 // Pin configuration for ESP32-CAM
 #define PWDN_GPIO_NUM    32
@@ -93,6 +97,8 @@ void ReportCouldNotCreateFile(String target);
 
 // Return size of file
 String file_size(int bytes);
+
+String getNextBufferPath();
 // ---------------------------------------------------- End of Web Server Code ----------------------------------------------
 
 // ---------------------------------------------------- Object Detection Code -----------------------------------------------
@@ -120,15 +126,20 @@ bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t* out_buf
 // Camera initialization function
 bool initCamera();
 
-// Function to capture and save an image
+// Function to capture and save an image in the 'Photographs' directory
 bool takePhoto();
+
+// Function to capture and save an image in the 'Buffer' directory
+bool takePhotoBuffer();
+
+void saveRawFrameToSD(uint8_t* buf, size_t w, size_t h);
 
 // Initialize the microSD card
 void initMicroSDCard();
 // ---------------------------------------------------- End of Camera Code --------------------------------------------------
 
 // ---------------------------------------------------- Interrupt Code -------------------------------------------------------
-// The volatile flag tells the compiler NOT to perform any optimizations on 'takePhotoFlag'
+// The volatile attribute tells the compiler NOT to perform any optimizations on 'takePhotoFlag'
 // This attribute is important for variables involved in intterrupts
 volatile bool takePhotoFlag = false;
 unsigned long lastInterruptTime = 0;
@@ -151,7 +162,7 @@ void IRAM_ATTR buttonPressedISR()
 // MAC address of responder (ESP32-WROOM-32E)
 uint8_t broadcastAddress[] = {0xE0, 0x8C, 0xFE, 0xC2, 0x10, 0x88};
 
-// Structure the data that we'll send to the DevKitC V4
+// Structure the data that we'll send to the DevKitC V4 (i.e., ESP32-WROOM-32E)
 typedef struct CAM_Message
 {
   uint16_t x;
@@ -292,6 +303,8 @@ void loop() {
     takePhoto();
     takePhotoFlag = false;
   }
+
+  takePhotoBuffer();
 // ---------------------------------------------------- Object Detection Code -----------------------------------------------
 // NOTE: This code was taken nearly verbatim from the example code provided by the library
   if(ei_sleep(5) != EI_IMPULSE_OK)
@@ -378,8 +391,14 @@ void SD_dir()
 {
   if (SD_present) 
   {
+    String currentDir = "/";
+    if(server.hasArg("dir"))
+    {
+      currentDir = "/" + server.arg("dir");
+    }
+
     // An argument was received, so perform its corresponding action
-    if (server.args() > 0 )
+    if (server.args() > 0 && !server.hasArg("dir"))
     { 
       Serial.println(server.arg(0));
   
@@ -402,7 +421,38 @@ void SD_dir()
         Serial.println(Order);
       }
     }
+    
+    SendHTML_Header();
+    
+    // If we are at the root, show the "Photographs" and "Buffer" options
+    if (currentDir == "/") {
+      webpage += F("<h3>Select a Directory:</h3>");
+      webpage += F("<ul>");
+      webpage += F("<li><a href='/?dir=Photographs'>[ Photographs ]</a></li>");
+      webpage += F("<li><a href='/?dir=Buffer'>[ Buffer ]</a></li>");
+      webpage += F("</ul><br><br>");
+    } 
+    else {
+      // If we are inside a directory, show a back button and the files
+      webpage += "<h3>Folder: " + currentDir + "</h3>";
+      webpage += F("<a href='/'>[ Back to Root ]</a><br><br>");
+      webpage += F("<table align='center'>");
+      webpage += F("<tr><th>Name</th><th style='width:20%'>Type</th><th>Size</th><th>Action</th></tr>");
+      
+      // Call printDirectory for the specific folder selected
+      printDirectory(currentDir.c_str(), 0);
+      
+      webpage += F("</table>");
+    }
 
+    append_page_footer();
+    SendHTML_Content();
+    SendHTML_Stop();
+  } 
+  else {
+    ReportSDNotPresent();
+  }
+    /*
     // Open the root directory of the microSD card
     File root = SD_MMC.open("/");
 
@@ -428,6 +478,7 @@ void SD_dir()
   } 
   else 
     ReportSDNotPresent();
+  */
 }
 
 // Upload a file to the microSD card
@@ -459,6 +510,10 @@ void printDirectory(const char * dirname, uint8_t levels)
 
   int i = 0;
   while(file){
+
+    String fullPath = String(dirname) + "/" + String(file.name());
+    fullPath.replace("//", "/");
+
     if (webpage.length() > 1000) {
       SendHTML_Content();
     }
@@ -478,17 +533,32 @@ void printDirectory(const char * dirname, uint8_t levels)
       else                                  fsize = String(bytes/1024.0/1024.0/1024.0,3)+" GB";
       webpage += "<td>"+fsize+"</td>";
       webpage += "<td>";
+      webpage += "<form action='/' method='post' style='display:inline;'>";
+      webpage += "<button type='submit' name='download' value='download_" + fullPath + "'>Download</button>";
+      webpage += "</form> "; // Space between buttons
+
+      // 2. Correct Delete Button
+      webpage += "<form action='/' method='post' style='display:inline;'>";
+      webpage += "<button type='submit' name='delete' value='delete_" + fullPath + "'>Delete</button>";
+      webpage += "</form>";
+
+      webpage += "</td>";
+      webpage += "</tr>";
+      /*
       webpage += F("<FORM action='/' method='post'>"); 
       webpage += F("<button type='submit' name='download'"); 
       webpage += F("' value='"); webpage +="download_"+String(file.name()); webpage +=F("'>Download</button>");
-      webpage += "</td>";
-      webpage += "<td>";
+      //webpage += "</td>";
+      // webpage += "<td>";
       webpage += F("<FORM action='/' method='post'>"); 
       webpage += F("<button type='submit' name='delete'"); 
       webpage += F("' value='"); webpage +="delete_"+String(file.name()); webpage +=F("'>Delete</button>");
+      webpage += F("<button type='submit' name='download' value='download_"); 
+      webpage += fullPath; // Use full path for the action
+      webpage += F("'>Download</button></form></td>");
       webpage += "</td>";
       webpage += "</tr>";
-
+      */
     }
     file = root.openNextFile();
     i++;
@@ -662,6 +732,25 @@ String file_size(int bytes)
   else                              fsize = String(bytes/1024.0/1024.0/1024.0,3)+" GB";
   return fsize;
 }
+
+String getNextBufferPath()
+{
+  String path = "/Buffer/photo_" + String(bufferIndex) + ".jpg";
+
+  if(SD_MMC.exists(path))
+  {
+    Serial.println("Buffer full, deleting oldest: " + path);
+    SD_MMC.remove(path);
+  }
+
+  bufferIndex++;
+  if(bufferIndex >= BUFFERCOUNT)
+  {
+    bufferIndex = 0;
+  }
+
+  return path;
+}
 // ---------------------------------------------------- End of Web Server Code ----------------------------------------------
 
 // ---------------------------------------------------- Object Detection Code -----------------------------------------------
@@ -815,12 +904,43 @@ bool takePhoto()
     }
 
     // Generate a unique filename
-    String path = "/photo_" + String(millis()) + ".jpg";
+    String path = "/Photographs/photo_" + String(millis()) + ".jpg";
 
     // Save image to microSD card
     File file = SD_MMC.open(path.c_str(), FILE_WRITE);
     if (!file) {
         Serial.println("Failed to open file for writing!");
+        esp_camera_fb_return(fb);
+        return false;
+    }
+
+    file.write(fb->buf, fb->len);
+    file.close();
+
+    esp_camera_fb_return(fb);
+    Serial.println("Saved file to: " + path);
+    return true;
+}
+
+// Function to capture and save an image in the 'Buffer' directory
+bool takePhotoBuffer() 
+{
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("Camera capture failed!");
+        return false;
+    }
+
+    // Generate a unique filename
+    // String path = "/Photographs/photo_" + String(millis()) + ".jpg";
+
+    // Get the next pathname for the rolling buffer
+    String path = getNextBufferPath();
+
+    // Save image to microSD card
+    File file = SD_MMC.open(path.c_str(), FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to open file for writing! Path: " + path);
         esp_camera_fb_return(fb);
         return false;
     }

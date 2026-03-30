@@ -31,11 +31,11 @@ void append_page_header()
   webpage += F("a{font-size:75%;}");
   webpage += F("p{font-size:75%;}");
   webpage += F("</style></head><body><h1>Rider Companion</h1>");
-  webpage += F("<ul>");
+  // webpage += F("<ul>");
   // Menu bar with commands
-  webpage += F("<li><a href='/'>Files</a></li>");
-  webpage += F("<li><a href='/upload'>Configuration</a></li>"); 
-  webpage += F("</ul>");
+  // webpage += F("<li><a href='/'>Files</a></li>");
+  // webpage += F("<li><a href='/upload'>Configuration</a></li>"); 
+  // webpage += F("</ul>");
 }
 // Saves repeating many lines of code for HTML page footers
 void append_page_footer()
