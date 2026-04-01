@@ -142,6 +142,7 @@ void initMicroSDCard();
 // The volatile attribute tells the compiler NOT to perform any optimizations on 'takePhotoFlag'
 // This attribute is important for variables involved in intterrupts
 volatile bool takePhotoFlag = false;
+volatile bool stopBufferFlag = false;
 unsigned long lastInterruptTime = 0;
 
 // The 'IRAM_ATTR' places this function in the interntal RAM
@@ -192,6 +193,7 @@ void OnDataSent(const esp_now_send_info_t *mac_addr, esp_now_send_status_t statu
 typedef struct DEVKIT_Message
 {
   bool takePicture;
+  bool stopBuffer;
 } DEVKIT_Message;
 
 // Create an object of type DEVKIT_Message called 'Control_Signal'
@@ -206,7 +208,8 @@ void OnDataRecv(const esp_now_recv_info_t *mac_addr, const uint8_t *incomingData
   // Serial.println(length);
   // Serial.print("takePicture: ");
   // Serial.println(Control_Signal.takePicture);
-  takePhotoFlag = Control_Signal.takePicture;
+  takePhotoFlag  = Control_Signal.takePicture;
+  stopBufferFlag = Control_Signal.stopBuffer;
 }
 // ---------------------------------------------------- End of Receiver Code -------------------------------------------------
 
@@ -304,7 +307,11 @@ void loop() {
     takePhotoFlag = false;
   }
 
-  takePhotoBuffer();
+  // Do we want to stop taking photos and storing them into the buffer?
+  if(~stopBufferFlag)
+  {
+    takePhotoBuffer();
+  }
 // ---------------------------------------------------- Object Detection Code -----------------------------------------------
 // NOTE: This code was taken nearly verbatim from the example code provided by the library
   if(ei_sleep(5) != EI_IMPULSE_OK)
@@ -878,11 +885,13 @@ bool initCamera()
         config.frame_size = FRAMESIZE_QVGA;
         config.jpeg_quality = 12;
         config.fb_count = 1;
+        Serial.println("RESOLUTION: 1280x720");
     } else 
     {
         config.frame_size = FRAMESIZE_SVGA;
         config.jpeg_quality = 12;
         config.fb_count = 1;
+        Serial.println("RESOLUTION: 800x600");
     }
 
     // These paramters are for the object deteection model

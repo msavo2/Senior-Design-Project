@@ -1,6 +1,10 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
+#define FOCAL_LENGTH 14.3
+#define CAR_WIDTH    67
+#define DISTANCE     5.0
+
 // ---------------------------------------------------- Transmitter Code ----------------------------------------------------
 // MAC address of ESP32-CAM
 uint8_t broadcastAddress_1[] = {0xC0, 0xCD, 0xD6, 0xCF, 0x14, 0x94};
@@ -11,6 +15,7 @@ uint8_t broadcastAddress_2[] = {0xC0, 0xCD, 0xD6, 0x8D, 0xFC, 0x88};
 typedef struct DEVKIT_Message
 {
   bool takePicture;
+  bool stopBuffer;
 } DEVKIT_Message;
 
 // Create an object of type DEVKIT_Message called 'Control_Signal'
@@ -58,6 +63,23 @@ void OnDataRecv(const esp_now_recv_info_t *mac_addr, const uint8_t *incomingData
   Serial.println(FOMO_Coordinates.width);
   Serial.print("height: ");
   Serial.println(FOMO_Coordinates.height);
+  bool carClose = 0;
+  float distance = ((FOCAL_LENGTH * CAR_WIDTH) / FOMO_Coordinates.width) / 12; // Expressed in feet
+  if(distance <= DISTANCE)
+  {
+    Serial.println("Detected car too close! Take a photo now...");
+    carClose = 1;
+    Control_Signal.takePicture = carClose;
+    esp_err_t result = esp_now_send(broadcastAddress_1, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
+    if(result == ESP_OK)
+    {
+      Serial.println("(C0:CD:D6:CF:14:94): Sending Confirmed");
+    }
+    else
+    {
+      Serial.println("(C0:CD:D6:CF:14:94): Sending Error");
+    }
+    }
 }
 // ---------------------------------------------------- End of Receiver Code -------------------------------------------------
 
@@ -109,6 +131,7 @@ void loop() {
 
   // Create test data
 
+  /*
   bool takePicture_test = random(0, 2);
 
   Control_Signal.takePicture = takePicture_test;
@@ -135,4 +158,5 @@ void loop() {
     Serial.println("(C0:CD:D6:8D:FC:88): Sending Error");
   }
   delay(2000);
+  */
 }
