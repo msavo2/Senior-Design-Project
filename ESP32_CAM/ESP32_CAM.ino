@@ -30,9 +30,12 @@
 // Server name that we'll enter into a web browser (e.g., 'ESP32_CAM_SERVER.local') after we connect to the network
 #define SERVERNAME "ESP32_CAM_SERVER"
 // The size of our rolling buffer
-#define BUFFERCOUNT 50
+// 30 FPS * 10 Seconds = 300 images
+#define BUFFERCOUNT 300
 // The index of the buffer
 short bufferIndex = 0;
+// This global variable is used to determine when to take a photo in order to meet the 30 FPS target
+unsigned long lastelapsedTime = 0;
 
 // Pin configuration for ESP32-CAM
 #define PWDN_GPIO_NUM    32
@@ -204,10 +207,6 @@ DEVKIT_Message Control_Signal;
 void OnDataRecv(const esp_now_recv_info_t *mac_addr, const uint8_t *incomingData, int length)
 {
   memcpy(&Control_Signal, incomingData, sizeof(Control_Signal));
-  // Serial.print("Data received of length: ");
-  // Serial.println(length);
-  // Serial.print("takePicture: ");
-  // Serial.println(Control_Signal.takePicture);
   takePhotoFlag  = Control_Signal.takePicture;
   stopBufferFlag = Control_Signal.stopBuffer;
 }
@@ -238,6 +237,7 @@ void setup() {
     while(1);
   }
 
+  // Disable the brownout detector so as to prevent the ESP32-CAM from potentially restarting repeatedly
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
   // Initialize the push button with a pull-up resistor so that it's HIGH when the button isn't pressed
@@ -308,9 +308,19 @@ void loop() {
   }
 
   // Do we want to stop taking photos and storing them into the buffer?
+  unsigned long elapsedTime = millis();
   if(~stopBufferFlag)
   {
-    takePhotoBuffer();
+    // We want to take a photo every 33 milliseconds, but the object detection code below takes so long to run that the difference in time comes to be approximately 930 milliseconds
+    // That means that we can only achieve 1 FPS
+    // Commenting out 'delay(1000)' at the bottom of the loop makes no difference
+    if(elapsedTime - lastelapsedTime > 33)
+    {
+      //Serial.print("%elapsedTime - lastelapsedTime = ");
+      //Serial.println(elapsedTime - lastelapsedTime);
+      takePhotoBuffer();
+      lastelapsedTime = elapsedTime;
+    }
   }
 // ---------------------------------------------------- Object Detection Code -----------------------------------------------
 // NOTE: This code was taken nearly verbatim from the example code provided by the library
@@ -345,10 +355,6 @@ void loop() {
     ei_printf("ERR: Failed to run classifier (%d)\n", err);
     return;
   }
-
-  // Print the predictions
-  // ei_printf("Predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
-              // result_2.timing.dsp, result_2.timing.classification, result_2.timing.anomaly);
 
   #if EI_CLASSIFIER_OBJECT_DETECTION == 1
     ei_printf("Object detection bounding boxes:\r\n");
@@ -386,7 +392,7 @@ void loop() {
         Serial.println("Sending Error");
       }
 
-        delay(2000);
+      //delay(1000);
     }
   #endif
 // ---------------------------------------------------- End of Object Detection Code ----------------------------------------
@@ -459,33 +465,6 @@ void SD_dir()
   else {
     ReportSDNotPresent();
   }
-    /*
-    // Open the root directory of the microSD card
-    File root = SD_MMC.open("/");
-
-    if (root) {
-      root.rewindDirectory();
-      SendHTML_Header();    
-      webpage += F("<table align='center'>");
-      webpage += F("<tr><th>Name/Type</th><th style='width:20%'>Type File/Dir</th><th>File Size</th></tr>");
-      printDirectory("/",0);
-      webpage += F("</table>");
-      SendHTML_Content();
-      root.close();
-    }
-    else 
-    {
-      SendHTML_Header();
-      webpage += F("<h3>No Files Found</h3>");
-    }
-    append_page_footer();
-    SendHTML_Content();
-    // Stop is needed because no content length was sent
-    SendHTML_Stop();
-  } 
-  else 
-    ReportSDNotPresent();
-  */
 }
 
 // Upload a file to the microSD card
@@ -551,21 +530,6 @@ void printDirectory(const char * dirname, uint8_t levels)
 
       webpage += "</td>";
       webpage += "</tr>";
-      /*
-      webpage += F("<FORM action='/' method='post'>"); 
-      webpage += F("<button type='submit' name='download'"); 
-      webpage += F("' value='"); webpage +="download_"+String(file.name()); webpage +=F("'>Download</button>");
-      //webpage += "</td>";
-      // webpage += "<td>";
-      webpage += F("<FORM action='/' method='post'>"); 
-      webpage += F("<button type='submit' name='delete'"); 
-      webpage += F("' value='"); webpage +="delete_"+String(file.name()); webpage +=F("'>Delete</button>");
-      webpage += F("<button type='submit' name='download' value='download_"); 
-      webpage += fullPath; // Use full path for the action
-      webpage += F("'>Download</button></form></td>");
-      webpage += "</td>";
-      webpage += "</tr>";
-      */
     }
     file = root.openNextFile();
     i++;
