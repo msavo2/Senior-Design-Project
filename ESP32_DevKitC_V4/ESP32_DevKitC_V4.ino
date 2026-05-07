@@ -31,9 +31,10 @@ MPU6050_VibrationRMS Sensor;
 
 // ---------------------------------------------------- Transmitter Code ----------------------------------------------------
 // MAC address of ESP32-CAM
-uint8_t broadcastAddress_1[] = {0xC0, 0xCD, 0xD6, 0xCF, 0x14, 0x94};
+// This camera is on the same perfboard as the DevKitC V4
+uint8_t broadcastAddress_1[] = {0xD4, 0xE9, 0xF4, 0xA2, 0x70, 0x89};
 // MAC address of the other ESP32-CAM
-uint8_t broadcastAddress_2[] = {0xC0, 0xCD, 0xD6, 0x8D, 0xFC, 0x88};
+uint8_t broadcastAddress_2[] = {0x70, 0x4B, 0xCA, 0x24, 0x82, 0xE9};
 
 // Structure the data that we'll send to the ESP32-CAM
 typedef struct DEVKIT_Message
@@ -94,16 +95,26 @@ void OnDataRecv(const esp_now_recv_info_t *mac_addr, const uint8_t *incomingData
     Serial.println("Detected car too close! Take a photo now...");
     carClose = 1;
     Control_Signal.takePicture = carClose;
-    esp_err_t result = esp_now_send(broadcastAddress_1, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
-    if(result == ESP_OK)
+    esp_err_t result_1 = esp_now_send(broadcastAddress_1, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
+    esp_err_t result_2 = esp_now_send(broadcastAddress_2, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
+    if(result_1 == ESP_OK)
     {
-      Serial.println("(C0:CD:D6:CF:14:94): Sending Confirmed");
+      Serial.println("(D4:E9:F4:A2:70:89): Sending Confirmed");
     }
     else
     {
-      Serial.println("(C0:CD:D6:CF:14:94): Sending Error");
+      Serial.println("(D4:E9:F4:A2:70:89): Sending Error");
     }
+    
+    if(result_2 == ESP_OK)
+    {
+      Serial.println("(70:4B:CA:24:82:E9): Sending Confirmed");
     }
+    else
+    {
+      Serial.println("(70:4B:CA:24:82:E9): Sending Error");
+    }
+  }
 }
 // ---------------------------------------------------- End of Receiver Code -------------------------------------------------
 
@@ -141,12 +152,12 @@ void setup() {
   // Now add the ESP32-CAMs as peers
   if(esp_now_add_peer(&peerInfo_1) != ESP_OK)
   {
-    Serial.println("Failed to add ESP32-CAM with MAC address C0:CD:D6:CF:14:94");
+    Serial.println("Failed to add ESP32-CAM with MAC address D4:E9:F4:A2:70:89");
   }
 
   if(esp_now_add_peer(&peerInfo_2) != ESP_OK)
   {
-    Serial.println("Failed to add ESP32-CAM with MAC address C0:CD:D6:8D:FC:88");
+    Serial.println("Failed to add ESP32-CAM with MAC address 70:4B:CA:24:82:E9");
   }
 
   // Initialize the MPU
@@ -264,25 +275,15 @@ void loop() {
     // Send the message to the ESP32-CAM
     Control_Signal.takePicture = 1;
     //esp_err_t result_1 = esp_now_send(broadcastAddress_1, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
-    esp_err_t result_2 = esp_now_send(broadcastAddress_2, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
+    esp_err_t result_1= esp_now_send(broadcastAddress_1, (uint8_t*) &Control_Signal, sizeof(Control_Signal));
     
-    /*
     if(result_1 == ESP_OK)
     {
-      Serial.println("(C0:CD:D6:CF:14:94): Sending Confirmed");
+      Serial.println("(70:4B:CA:24:82:E9): Sending Confirmed");
     }
     else
     {
-      Serial.println("(C0:CD:D6:CF:14:94): Sending Error");
-    }
-    */
-    if(result_2 == ESP_OK)
-    {
-      Serial.println("(C0:CD:D6:8D:FC:88): Sending Confirmed");
-    }
-    else
-    {
-      Serial.println("(C0:CD:D6:8D:FC:88): Sending Error");
+      Serial.println("(70:4B:CA:24:82:E9): Sending Error");
     }
     Control_Signal.takePicture = 0;
   }
